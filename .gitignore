@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+donnees/demande_*.xlsx
+donnees/meteo_*.csv
+.~lock.*
