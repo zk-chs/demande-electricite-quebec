@@ -17,7 +17,11 @@ d'évaluer la fiabilité du modèle sur une année de test.
   la température, courbe du modèle en V (deux droites qui se rejoignent au point
   T0), indicateurs du modèle.
 - Page « Fiabilité du modèle » : erreurs (MAE, RMSE, MAPE) sur 2023, comparaison
-  avec deux références simples, demande réelle et prévue, tableau des 8 modèles.
+  avec deux références simples, demande réelle et prévue, tableau des 8 modèles,
+  et simulation de l'effet d'une température imprécise.
+- Page « Prévision à 7 jours » : saisie de 7 températures et d'un premier jour ;
+  demande prévue pour chaque jour avec un intervalle à 90 % construit à partir des
+  erreurs observées en 2023. Le modèle ne connaît pas les jours fériés.
 - Barre latérale : choix de la température (Gatineau, Montréal, Québec ou
   moyenne des trois villes) et prise en compte ou non des jours de la semaine.
 
@@ -71,6 +75,7 @@ de jour.
 - `modele.py` : calculs (chargement, modèle, mesures d'erreur).
 - `telecharger.py`, `construire_jour.py` : récupération et préparation des données.
 - `comparer_modeles.py` : comparaison des modèles en ligne de commande.
+- `tester_imprecision.py` : effet d'une température imprécise sur l'erreur du modèle.
 - `exploration/` : scripts de contrôle et d'exploration des données.
 - `donnees/` : tableau journalier.
 

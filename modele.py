@@ -139,3 +139,69 @@ def comparer_modeles(train, test):
                 "MAPE (%)": round(mes["MAPE"], 2),
             })
     return pd.DataFrame(lignes)
+
+
+# ----------------------------------------------------------------------------
+# Prévision à 7 jours et sensibilité à l'imprécision de la température
+# ----------------------------------------------------------------------------
+def intervalle_erreur(modele, test, niveau=0.90):
+    """Erreurs (réel - prévu) observées sur l'année de test, pour borner une prévision.
+
+    Renvoie (erreur_basse, erreur_haute) : les quantiles de ces erreurs qui encadrent
+    une proportion `niveau` des jours de test. L'erreur basse est en général négative.
+    """
+    y = test["mw_moyen"].to_numpy()
+    erreurs = y - prevoir(modele, test)
+    alpha = (1 - niveau) / 2
+    return float(np.quantile(erreurs, alpha)), float(np.quantile(erreurs, 1 - alpha))
+
+
+def prevoir_semaine(modele, date_debut, temperatures, niveau=0.90, test=None):
+    """Demande prévue (MW) pour des jours consécutifs, à partir de températures saisies.
+
+    La température saisie doit correspondre à la définition utilisée par le modèle
+    (une ville, ou la moyenne des trois villes). Si `test` est fourni, on ajoute un
+    intervalle (colonnes `bas` et `haut`) fondé sur les erreurs observées sur `test`.
+    """
+    jours = pd.date_range(pd.Timestamp(date_debut), periods=len(temperatures))
+    df = pd.DataFrame({
+        "jour": jours,
+        "jour_semaine": jours.dayofweek,
+        modele["colonne"]: np.asarray(temperatures, dtype=float),
+    })
+    df["prevision_mw"] = prevoir(modele, df)
+    if test is not None:
+        bas, haut = intervalle_erreur(modele, test, niveau)
+        df["bas"] = df["prevision_mw"] + bas
+        df["haut"] = df["prevision_mw"] + haut
+    return df
+
+
+def sensibilite_bruit(modele, test, ecarts_types=(0, 1, 2, 3, 4), n_tirages=200, graine=42):
+    """Simule une température imprécise : on ajoute un bruit aléatoire (loi normale,
+    écart-type en °C) aux températures de test, sans ré-entraîner le modèle, et on
+    mesure la MAE. Chaque niveau de bruit est répété `n_tirages` fois."""
+    rng = np.random.default_rng(graine)
+    y = test["mw_moyen"].to_numpy()
+    colonne = modele["colonne"]
+    lignes = []
+    mae_sans_bruit = None
+    for sd in ecarts_types:
+        maes = []
+        for _ in range(1 if sd == 0 else n_tirages):
+            t = test.copy()
+            if sd > 0:
+                t[colonne] = t[colonne].to_numpy() + rng.normal(0, sd, len(t))
+            maes.append(mesures(y, prevoir(modele, t))["MAE"])
+        maes = np.array(maes)
+        moyenne = float(maes.mean())
+        if mae_sans_bruit is None:
+            mae_sans_bruit = moyenne
+        lignes.append({
+            "Bruit sur la température (écart-type, °C)": sd,
+            "MAE moyenne (MW)": round(moyenne),
+            "MAE, 5e centile (MW)": round(float(np.quantile(maes, 0.05))),
+            "MAE, 95e centile (MW)": round(float(np.quantile(maes, 0.95))),
+            "Hausse par rapport à 0 °C (%)": round((moyenne / mae_sans_bruit - 1) * 100, 1),
+        })
+    return pd.DataFrame(lignes)

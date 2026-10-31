@@ -11,6 +11,8 @@ import modele as m
 
 st.set_page_config(page_title="Demande d'électricité au Québec", layout="wide")
 
+JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+
 
 # Les calculs lourds sont mis en cache : ils ne sont refaits que si les paramètres changent
 @st.cache_data
@@ -25,6 +27,12 @@ def entrainer(colonne, avec_jours):
 
 
 @st.cache_data
+def sensibilite(colonne, avec_jours):
+    train, test = m.decouper(charger())
+    return m.sensibilite_bruit(m.entrainer(train, colonne, avec_jours), test)
+
+
+@st.cache_data
 def tableau_modeles():
     train, test = m.decouper(charger())
     return m.comparer_modeles(train, test)
@@ -35,7 +43,7 @@ j = charger()
 train, test = m.decouper(j)
 
 st.sidebar.title("Paramètres")
-page = st.sidebar.radio("Page", ["Température et demande", "Fiabilité du modèle"])
+page = st.sidebar.radio("Page", ["Température et demande", "Fiabilité du modèle", "Prévision à 7 jours"])
 nom_temp = st.sidebar.selectbox("Température utilisée", list(m.NOMS_TEMPERATURE.keys()), index=3)
 colonne = m.NOMS_TEMPERATURE[nom_temp]
 avec_jours = st.sidebar.checkbox("Tenir compte des jours de la semaine", value=True)
@@ -80,7 +88,7 @@ if page == "Température et demande":
     c4.metric("Pente côté chaud (MW par °C)", f"{b[2]:,.0f}".replace(",", " "))
 
 # ---------------------------------------------------------------- Page 2
-else:
+elif page == "Fiabilité du modèle":
     st.header("Fiabilité du modèle")
     st.caption(
         "Le modèle est entraîné sur 2019-2022 puis évalué sur 2023, une année qu'il n'a pas "
@@ -135,3 +143,61 @@ else:
         )
     with st.expander("Comparaison des 8 modèles sur 2023"):
         st.dataframe(tableau_modeles(), hide_index=True)
+    with st.expander("Sensibilité à une température imprécise (simulation)"):
+        st.caption(
+            "On ajoute un bruit aléatoire aux températures de 2023 (le modèle n'est pas ré-entraîné) "
+            "et on mesure la MAE, en répétant 200 tirages par niveau. Ces niveaux de bruit sont des "
+            "scénarios : ils ne représentent pas l'erreur réelle des prévisions météorologiques."
+        )
+        st.dataframe(sensibilite(colonne, avec_jours), hide_index=True)
+
+# ---------------------------------------------------------------- Page 3
+else:
+    st.header("Prévision de la demande pour 7 jours")
+    st.caption(
+        f"Saisissez la température moyenne de chaque jour pour la définition choisie dans la barre "
+        f"latérale ({nom_temp}). L'intervalle est construit à partir des erreurs observées en 2023 "
+        "(90 % des jours de 2023 se situent à l'intérieur). Le modèle ne connaît pas les jours fériés."
+    )
+    modele = entrainer(colonne, avec_jours)
+    debut = pd.Timestamp(st.date_input("Premier jour de la prévision", value=pd.Timestamp("2024-01-01")))
+    defauts = j[colonne].tail(7).round(1).tolist()
+    st.caption("Valeurs initiales : les 7 derniers jours des données (2023-12-25 à 2023-12-31). Modifiez-les.")
+
+    cases = st.columns(7)
+    temperatures = []
+    for i, case in enumerate(cases):
+        jour = debut + pd.Timedelta(days=i)
+        temperatures.append(case.number_input(
+            f"{JOURS[jour.dayofweek]} {jour:%d-%m}", value=float(defauts[i]), step=0.5, key=f"temp_{i}"))
+
+    mini, maxi = train[colonne].min(), train[colonne].max()
+    if any(t < mini or t > maxi for t in temperatures):
+        st.warning(
+            f"Au moins une température sort de la plage observée à l'entraînement ({mini:.1f} à {maxi:.1f} °C) : "
+            "la prévision est alors une extrapolation, moins fiable."
+        )
+
+    _, test_ = m.decouper(charger())
+    res = m.prevoir_semaine(modele, debut, temperatures, niveau=0.90, test=test_)
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.plot(res["jour"], res["prevision_mw"], marker="o", color="tab:orange", label="Demande prévue")
+    ax.fill_between(res["jour"], res["bas"], res["haut"], alpha=0.25, color="tab:orange",
+                    label="Intervalle à 90 % (erreurs de 2023)")
+    ax.set_ylabel("Demande moyenne journalière (MW)")
+    ax.legend()
+    fig.autofmt_xdate()
+    st.pyplot(fig)
+    plt.close(fig)
+
+    tab = pd.DataFrame({
+        "Jour": [f"{JOURS[d.dayofweek]} {d:%Y-%m-%d}" for d in res["jour"]],
+        "Température saisie (°C)": temperatures,
+        "Demande prévue (MW)": res["prevision_mw"].round(0),
+        "Borne basse (MW)": res["bas"].round(0),
+        "Borne haute (MW)": res["haut"].round(0),
+    })
+    st.dataframe(tab, hide_index=True)
+    st.metric("Demande moyenne prévue sur les 7 jours",
+              f"{res['prevision_mw'].mean():,.0f} MW".replace(",", " "))
